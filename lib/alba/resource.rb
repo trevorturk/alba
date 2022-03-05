@@ -28,6 +28,9 @@ module Alba
 
     # Instance methods
     module InstanceMethods
+      ParameterObject = Struct.new(:object, :key, :attribute)
+      private_constant :ParameterObject
+
       attr_reader :object, :params
 
       # @param object [Object] the object to be serialized
@@ -142,7 +145,7 @@ module Alba
       def converter
         lambda do |object|
           arrays = @_attributes.map do |key, attribute|
-            key_and_attribute_body_from(object, key, attribute)
+            key_and_attribute_body_from(ParameterObject.new(object, key, attribute))
           rescue ::Alba::Error, FrozenError, TypeError
             raise
           rescue StandardError => e
@@ -152,41 +155,46 @@ module Alba
         end
       end
 
-      def key_and_attribute_body_from(object, key, attribute)
+      def key_and_attribute_body_from(parameter)
+        object, key, attribute = *parameter
         key = transform_key(key)
         if attribute.is_a?(Array) # Conditional
-          conditional_attribute(object, key, attribute)
+          conditional_attribute(parameter)
         else
-          fetched_attribute = fetch_attribute(object, key, attribute)
+          fetched_attribute = fetch_attribute(ParameterObject.new(object, key, attribute))
           [key, fetched_attribute]
         end
       end
 
-      def conditional_attribute(object, key, attribute)
+      def conditional_attribute(parameter)
+        object, key, attribute = *parameter
         condition = attribute.last
+        parameter = ParameterObject.new(object, key, attribute.first)
         if condition.is_a?(Proc)
-          conditional_attribute_with_proc(object, key, attribute.first, condition)
+          conditional_attribute_with_proc(parameter, condition)
         else
-          conditional_attribute_with_symbol(object, key, attribute.first, condition)
+          conditional_attribute_with_symbol(parameter, condition)
         end
       end
 
-      def conditional_attribute_with_proc(object, key, attribute, condition)
+      def conditional_attribute_with_proc(parameter, condition)
         arity = condition.arity
         # We can return early to skip fetch_attribute
         return if arity <= 1 && !instance_exec(object, &condition)
 
-        fetched_attribute = fetch_attribute(object, key, attribute)
+        object, key, attribute = *parameter
+
+        fetched_attribute = fetch_attribute(parameter)
         attr = attribute.is_a?(Alba::Association) ? attribute.object : fetched_attribute
         return if arity >= 2 && !instance_exec(object, attr, &condition)
 
         [key, fetched_attribute]
       end
 
-      def conditional_attribute_with_symbol(object, key, attribute, condition)
+      def conditional_attribute_with_symbol(parameter, condition)
         return unless __send__(condition)
 
-        [key, fetch_attribute(object, key, attribute)]
+        [parameter.key, fetch_attribute(parameter)]
       end
 
       def handle_error(error, object, key, attribute)
@@ -221,7 +229,8 @@ module Alba
       end
       # rubocop:enable Metrics/MethodLength
 
-      def fetch_attribute(object, key, attribute)
+      def fetch_attribute(parameter)
+        object, key, attribute = *parameter
         value = case attribute
                 when Symbol then fetch_attribute_from_object_and_resource(object, attribute)
                 when Proc then instance_exec(object, &attribute)
