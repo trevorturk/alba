@@ -11,10 +11,10 @@ module Alba
     private_constant :DSLS
 
     WITHIN_DEFAULT = Object.new.freeze
-    private_constant :WITHIN_DEFAULT
+    # private_constant :WITHIN_DEFAULT
 
     CONDITION_UNMET = Object.new.freeze
-    private_constant :CONDITION_UNMET
+    # private_constant :CONDITION_UNMET
 
     # @private
     def self.included(base)
@@ -36,10 +36,12 @@ module Alba
       # @param object [Object] the object to be serialized
       # @param params [Hash] user-given Hash for arbitrary data
       # @param within [Object, nil, false, true] determines what associations to be serialized. If not set, it serializes all associations.
-      def initialize(object, params: {}, within: WITHIN_DEFAULT)
+      # @param meta [Hash, nil] additional meta data included in serialized JSON
+      def initialize(object, params: {}, within: WITHIN_DEFAULT, meta: nil)
         @object = object
         @params = params.freeze
         @within = within
+        @meta = meta
         @method_existence = {} # Cache for `respond_to?` result
         DSLS.each_key { |name| instance_variable_set("@#{name}", self.class.__send__(name)) }
       end
@@ -50,13 +52,7 @@ module Alba
       # @param meta [Hash] metadata for this seialization
       # @return [String] serialized JSON string
       def serialize(root_key: nil, meta: {})
-        key = root_key.nil? ? fetch_key : root_key
-        hash = if key && key != ''
-                 h = {key.to_s => serializable_hash}
-                 hash_with_metadata(h, meta)
-               else
-                 serializable_hash
-               end
+        hash = serializable_hash(root_key: root_key, meta: meta)
         serialize_with(hash)
       end
       alias to_json serialize
@@ -64,8 +60,15 @@ module Alba
       # A Hash for serialization
       #
       # @return [Hash]
-      def serializable_hash
-        collection? ? serializable_hash_for_collection : converter.call(@object)
+      def serializable_hash(root_key: nil, meta: {})
+        base_hash = collection? ? serializable_hash_for_collection : converter.call(@object)
+        key = root_key.nil? ? fetch_key : root_key
+        if key && key != ''
+          h = {key.to_s => base_hash}
+          hash_with_metadata(h, meta)
+        else
+          base_hash
+        end
       end
       alias to_h serializable_hash
 
@@ -101,10 +104,11 @@ module Alba
       end
 
       def hash_with_metadata(hash, meta)
-        return hash if meta.empty? && @_meta.nil?
+        return hash if meta.empty? && @_meta.nil? && @meta.nil?
 
-        metadata = @_meta ? instance_eval(&@_meta).merge(meta) : meta
-        hash[:meta] = metadata
+        meta.merge!(instance_eval(&@_meta)) if @_meta
+        meta.merge!(@meta) if @meta
+        hash[:meta] = meta
         hash
       end
 
@@ -135,7 +139,13 @@ module Alba
       end
 
       def resource_name
-        @resource_name ||= self.class.name.demodulize.delete_suffix('Resource').underscore
+        class_name = self.class.name.demodulize
+        suffix ||= if class_name.end_with?('Resource')
+                     'Resource'
+                   elsif class_name.end_with?('Serializer')
+                     'Serializer'
+                   end
+        @resource_name ||= class_name.delete_suffix(suffix).underscore
       end
 
       def transforming_root_key?
